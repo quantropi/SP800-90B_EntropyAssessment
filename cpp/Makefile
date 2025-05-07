@@ -2,7 +2,7 @@ ARCH ?= x86
 
 CXX ?= $(CROSS_COMPILE)g++
 
-CXXFLAGS = -std=c++11 -fopenmp -O2 -ffloat-store -I/usr/include/jsoncpp
+CXXFLAGS = -std=c++11 -fopenmp -O2 -ffloat-store -I/opt/homebrew/include -L/opt/homebrew/lib
 ifeq ($(ARCH),x86)
 CXXFLAGS += -march=native
 endif

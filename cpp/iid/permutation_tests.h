@@ -6,12 +6,17 @@
 #include "../shared/TestCase.h"
 #include <assert.h>
 #include <unistd.h>
+#include <vector>
+#include <iomanip>
 
 // The tests used
 const unsigned int num_tests = 19;
 const string test_names[] = {"excursion","numDirectionalRuns","lenDirectionalRuns","numIncreasesDecreases","numRunsMedian","lenRunsMedian","avgCollision","maxCollision","periodicity(1)","periodicity(2)","periodicity(8)","periodicity(16)","periodicity(32)","covariance(1)","covariance(2)","covariance(8)","covariance(16)","covariance(32)","compression"};
 
 using namespace std;
+
+const int LOW_THRESH = (int)(0.01/2 * PERMS);  // 50 when PERMS = 10000
+const int HIGH_THRESH = PERMS - LOW_THRESH;     // 9950
 
 /*
  * ---------------------------------------------
@@ -585,6 +590,8 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 	// Original test results (t) 
 	long double t[num_tests];
 	bool test_status[num_tests];
+	// To store p-values
+	std::vector<double> p_values(num_tests, 0.0);
 
 	istty = (isatty(STDOUT_FILENO)==1);
 
@@ -625,7 +632,6 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 		uint8_t *rawdata;
 		uint64_t xoshiro256starstarSeed[4];
 		long double tp[num_tests];
-		int passed_count;
 
 		data = new uint8_t[dp->len];
 		rawdata = new uint8_t[dp->len];
@@ -640,50 +646,37 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 			rawdata[i] = dp->rawsymbols[i];
 		}
 
-		passed_count = 0;
 		memcpy(xoshiro256starstarSeed, xoshiro256starstarMainSeed, sizeof(xoshiro256starstarMainSeed));
 		//Cause the RNG to jump omp_get_thread_num() * 2^128 calls
 		xoshiro_jump(omp_get_thread_num(), xoshiro256starstarSeed);
 
 		#pragma omp for
 		for(int i = 0; i < PERMS; ++i) {
-			if(passed_count < 19) {
+			{
 				char statusMessage[1024];
 				size_t statusMessageLength = 0;
 
 				FYshuffle(data, rawdata, dp->len, xoshiro256starstarSeed);
 				run_tests(dp, data, rawdata, rawmean, median, tp, test_status);
 
-				// Aggregate results into the counters
 				#pragma omp critical(resultUpdate)
 				{
 					for(unsigned int j = 0; j < num_tests; ++j){
 						if(test_status[j]) {
-							if(tp[j] > t[j]){
+							if (tp[j] < t[j]) {
 								C[j][0]++;
-							} else if(tp[j] == t[j]){
+							} else if (tp[j] == t[j]) {
 								C[j][1]++;
 							} else {
 								C[j][2]++;
 							}
-							if((C[j][0] + C[j][1] > 5) && (C[j][1] + C[j][2] > 5)) {
-								test_status[j] = false;
-							}
 						}
 					}
-					passed_count = 0;
-					for(unsigned int j=0; j < num_tests; j++) if(!test_status[j]) passed_count++;
-					completed ++;
-				} // end resultUpdate
+					completed++;
+				}
 
 				if(verbose == 2) {
 					int res;
-					/* Construct pretty output regardless of whether on terminal (tty) or 
-					* redirected to another file descriptor (eg. redirect to file).
-					* Note that if using something like 'tee' to replicate the output
-					* then it might be handy to use 'unbuffer' to fake the call into
-					* thinking it is still being sent to a tty.
-					*/
 					if(istty) {
 						statusMessage[0] = '\r';
 						statusMessage[1] = '\0';
@@ -693,47 +686,48 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 						statusMessageLength = 0;
 					}
 
-					res = snprintf(statusMessage+statusMessageLength, sizeof(statusMessage)-statusMessageLength, "%6.02f%% of Permutation test rounds, %6.02f%% of Permutation tests", (100.0*((float)completed)/((float)PERMS)), (100.0*((float)passed_count)/19.0));
+					res = snprintf(statusMessage+statusMessageLength, sizeof(statusMessage)-statusMessageLength,
+								   "\n %6.02f%% of Permutation test rounds", (100.0*((float)completed)/((float)PERMS)));
 					assert(res>0);
 					statusMessageLength += res;
 					assert(statusMessageLength < sizeof(statusMessage));
 
-					/* If not displaying to screen, then we can print even more information. Ultimately
-					* we want the '\n' however printed when not printing to terminal so that the redirected
-					* output looks nicer. 
-					*/
-					if(!istty)  {
-						res = snprintf(statusMessage+statusMessageLength, sizeof(statusMessage)-statusMessageLength, " (Core %d/%d, passed_count %d)\n", omp_get_thread_num(), omp_get_num_threads()-1, passed_count);
-						assert(res>0);
-						statusMessageLength += res;
-						assert(statusMessageLength < sizeof(statusMessage));
-					}
 					#pragma omp critical(verboseOutput)
 					{
 						fputs(statusMessage, stdout);
 						fflush(stdout);
 					}
 				}
-			} else {
-				//We don't have a lock for this branch, so make one to update the completed count.
-				#pragma omp atomic
-				completed ++;
 			}
-
 		}
-        	delete[](data);
-        	delete[](rawdata);
+		delete[](data);
+		delete[](rawdata);
 	} //end parallel
 
 	if(verbose > 1) print_results(C, verbose);
-        
-    populateTestCase(tc, C);
-	
-    for(unsigned int i = 0; i < num_tests; ++i){
-		if((C[i][0] + C[i][1] <= 5) || (C[i][1] + C[i][2] <= 5)){
-			return false;
-	 	}
-	}
 
-	return true;
+    populateTestCase(tc, C);
+	 tc.passed_iid_permutation_tests = true;
+		for (unsigned int i = 0; i < num_tests; ++i) {
+			if ((C[i][0] + C[i][1] <= 5) || (C[i][1] + C[i][2] <= 5)) {
+				tc.passed_iid_permutation_tests = false;
+				break;
+			}
+		}
+
+    if (verbose >= 1) {
+        std::cout << "\n=== Permutation Test P-values ===" << std::endl;
+    }
+    tc.p_values.clear();
+    for (unsigned int i = 0; i < num_tests; ++i) {
+        int total = C[i][0] + C[i][1] + C[i][2];
+        double p = (C[i][2] + 0.5 * C[i][1]) / total;
+        p_values[i] = p;
+        tc.p_values.push_back(p);
+        if (verbose >= 1) {
+            std::cout << "    " << std::setw(23) << test_names[i]
+                      << "  P-value: " << std::fixed << std::setprecision(6) << p << std::endl;
+        }
+    }
+    return true;
 }
