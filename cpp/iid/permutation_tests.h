@@ -8,6 +8,7 @@
 #include <unistd.h>
 #include <vector>
 #include <iomanip>
+#include <atomic>
 
 // The tests used
 const unsigned int num_tests = 19;
@@ -583,6 +584,9 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 
 	// Progress
 	size_t completed = 0;
+	int total_perms = PERMS;
+	std::atomic<int> next_percent{10};
+	int completed_test_index = 0;
 
 	// Counters for the pass/fail of each statistic
 	int C[num_tests][3];
@@ -650,56 +654,40 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 		//Cause the RNG to jump omp_get_thread_num() * 2^128 calls
 		xoshiro_jump(omp_get_thread_num(), xoshiro256starstarSeed);
 
+		// Remove verbose per-iteration progress logic
+
 		#pragma omp for
 		for(int i = 0; i < PERMS; ++i) {
+			FYshuffle(data, rawdata, dp->len, xoshiro256starstarSeed);
+			run_tests(dp, data, rawdata, rawmean, median, tp, test_status);
+
+			#pragma omp critical(resultUpdate)
 			{
-				char statusMessage[1024];
-				size_t statusMessageLength = 0;
-
-				FYshuffle(data, rawdata, dp->len, xoshiro256starstarSeed);
-				run_tests(dp, data, rawdata, rawmean, median, tp, test_status);
-
-				#pragma omp critical(resultUpdate)
-				{
-					for(unsigned int j = 0; j < num_tests; ++j){
-						if(test_status[j]) {
-							if (tp[j] < t[j]) {
-								C[j][0]++;
-							} else if (tp[j] == t[j]) {
-								C[j][1]++;
-							} else {
-								C[j][2]++;
-							}
+				for(unsigned int j = 0; j < num_tests; ++j){
+					if(test_status[j]) {
+						if (tp[j] < t[j]) {
+							C[j][0]++;
+						} else if (tp[j] == t[j]) {
+							C[j][1]++;
+						} else {
+							C[j][2]++;
 						}
 					}
-					completed++;
 				}
-
-				if(verbose == 2) {
-					int res;
-					if(istty) {
-						statusMessage[0] = '\r';
-						statusMessage[1] = '\0';
-						statusMessageLength = 1;
-					} else {
-						statusMessage[0] = '\0';
-						statusMessageLength = 0;
-					}
-
-					res = snprintf(statusMessage+statusMessageLength, sizeof(statusMessage)-statusMessageLength,
-								   "\n %6.02f%% of Permutation test rounds", (100.0*((float)completed)/((float)PERMS)));
-					assert(res>0);
-					statusMessageLength += res;
-					assert(statusMessageLength < sizeof(statusMessage));
-
-					#pragma omp critical(verboseOutput)
-					{
-						fputs(statusMessage, stdout);
-						fflush(stdout);
-					}
-				}
+				completed++;
 			}
+			// Remove all per-iteration prints
 		}
+
+		// Only one thread prints the progress bar at the end of the test
+		#pragma omp master
+		{
+			std::cout << "[";
+			for(int i = 0; i < 10; ++i) std::cout << "#";
+			std::cout << "] All permutation rounds complete for test " << (completed_test_index+1) << " of " << num_tests << std::endl;
+			completed_test_index++;
+		}
+
 		delete[](data);
 		delete[](rawdata);
 	} //end parallel
