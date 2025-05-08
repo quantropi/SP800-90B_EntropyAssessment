@@ -598,7 +598,7 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 	// To store p-values
 	std::vector<double> p_values(num_tests, 0.0);
 
-	istty = (isatty(STDOUT_FILENO)==1);
+	istty = (isatty(fileno(stderr)) == 1);
 
 	// Build map of results
 	for(unsigned int i = 0; i < num_tests; ++i){
