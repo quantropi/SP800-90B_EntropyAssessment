@@ -726,7 +726,7 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
     populateTestCase(tc, C);
 	 tc.passed_iid_permutation_tests = true;
 		for (unsigned int i = 0; i < num_tests; ++i) {
-			if ((C[i][0] + C[i][1] <= LOW_THRESH) || (C[i][1] + C[i][2] >= HIGH_THRESH)) {
+			if ((C[i][0] + C[i][1] <= LOW_THRESH) || (C[i][0] + C[i][2] >= HIGH_THRESH)) {
 				tc.passed_iid_permutation_tests = false;
 				break;
 			}
@@ -737,14 +737,15 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
     }
     tc.p_values.clear();
     for (unsigned int i = 0; i < num_tests; ++i) {
-        int total = C[i][0] + C[i][1] + C[i][2];
-        double p = (C[i][2] + 0.5 * C[i][1]) / total;
-        p_values[i] = p;
-        tc.p_values.push_back(p);
-        if (verbose >= 1) {
-            std::cout << "    " << std::setw(23) << test_names[i]
-                      << "  P-value: " << std::fixed << std::setprecision(6) << p << std::endl;
-        }
+		 int total = PERMS;
+		 double p = (C[i][2] + C[i][1]) / total;
+		 p_values[i] = p;
+		 tc.p_values.push_back(p);
+		 if (verbose >= 1)
+		 {
+			 std::cout << "    " << std::setw(23) << test_names[i]
+						  << "  P-value: " << std::fixed << std::setprecision(6) << p << std::endl;
+		 }
     }
     return true;
 }
