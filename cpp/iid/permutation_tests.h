@@ -1,7 +1,8 @@
+#include <fstream>
 #include <memory>
 #include <chrono>
-#include <fstream> // For ofstream
 #include <cstdio>  // For fileno
+#include <fstream>
 #pragma once
 
 #include <stdlib.h>
@@ -606,10 +607,12 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 	// Status stream for progress output (tty or redirected)
 	std::ostream* status_stream = &std::cout;
 	std::unique_ptr<std::ofstream> tty_out;
-	if (istty) {
-	    tty_out = std::unique_ptr<std::ofstream>(new std::ofstream("/dev/tty"));
+	if (!istty) {
+	    // Try opening /dev/tty directly for terminal output even if stdout is redirected
+	    tty_out.reset(new std::ofstream("/dev/tty"));
 	    if (tty_out->is_open()) {
 	        status_stream = tty_out.get();
+	        istty = true; // enable status updates
 	    }
 	}
 
@@ -643,8 +646,9 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 	}
 	
 	if(verbose == 2) cout << "Beginning permutation tests... these may take some time" << endl;
-	if (istty) {
-	    *status_stream << "[----------] 0/" << PERMS << " - 0.00% of total permutation complete...\nElapsed: 0s\nETA (HH:MM:SS): 00:00:00" << std::flush;
+	if(verbose >= 1) std::cout << std::endl;
+	if (istty && verbose >= 1) {
+	    *status_stream << "\n[----------] 0/" << PERMS << " - 0.00% of total permutation complete...\nElapsed: 0s\nETA (HH:MM:SS): 00:00:00" << std::flush;
 	}
 
 	// Progress tracking for all permutations
@@ -721,6 +725,7 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 			                    *status_stream << "Elapsed: " << elapsed << "s" << std::endl;
 			                    *status_stream << "ETA (HH:MM:SS): " << std::setfill('0') << std::setw(2) << eta_h << ":"
 			                              << std::setw(2) << eta_m << ":" << std::setw(2) << eta_s << std::flush;
+			                    std::cout << std::flush;  // Ensure no buffer bleed into terminal rendering
 			                }
 			            }
 			        }
@@ -744,8 +749,8 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 		delete[](rawdata);
 	} //end parallel
 
-	if (istty) {
-		*status_stream << "\r\033[K[##########] " << PERMS << "/" << PERMS
+	if (istty && verbose >= 1) {
+		*status_stream << "\n[##########] " << PERMS << "/" << PERMS
 				  << " - 100.00% of total permutation complete. ✅ Done.\n";
 	}
 	if(verbose > 1) print_results(C, verbose);
