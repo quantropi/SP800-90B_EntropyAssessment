@@ -1,3 +1,4 @@
+#include <chrono>
 #pragma once
 
 #include <stdlib.h>
@@ -579,11 +580,11 @@ void populateTestCase(IidTestCase &tc, int C[][3]){
 }
 
 bool permutation_tests(const data_t *dp, const double rawmean, const double median, const int verbose, IidTestCase &tc){
+	auto start_time = std::chrono::steady_clock::now();
 	uint64_t xoshiro256starstarMainSeed[4];
 	bool istty;
 
 	// Progress
-	size_t completed = 0;
 	int total_perms = PERMS;
 	std::atomic<int> next_percent{10};
 	int completed_test_index = 0;
@@ -629,6 +630,12 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 	}
 	
 	if(verbose == 2) cout << "Beginning permutation tests... these may take some time" << endl;
+	if (istty) {
+	    std::cout << "[----------] 0/" << PERMS << " - 0.00% of total permutation complete...\nElapsed: 0s\nETA (HH:MM:SS): 00:00:00" << std::flush;
+	}
+
+	// Progress tracking for all permutations
+	std::atomic<size_t> completed{0};
 
 	#pragma omp parallel
 	{
@@ -654,8 +661,6 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 		//Cause the RNG to jump omp_get_thread_num() * 2^128 calls
 		xoshiro_jump(omp_get_thread_num(), xoshiro256starstarSeed);
 
-		// Remove verbose per-iteration progress logic
-
 		#pragma omp for
 		for(int i = 0; i < PERMS; ++i) {
 			FYshuffle(data, rawdata, dp->len, xoshiro256starstarSeed);
@@ -674,24 +679,48 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 						}
 					}
 				}
-				completed++;
+				int p = ++completed;
+				if (istty) {
+					static thread_local int last_percent = -1;
+					int current_percent = (p * 10000) / PERMS; // percent in hundredths
+					if (current_percent > last_percent) {
+						last_percent = current_percent;
+						#pragma omp critical(printProgress)
+						{
+							float percent_display = (100.0f * p) / PERMS;
+							auto now = std::chrono::steady_clock::now();
+							auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+							double eta_seconds = (p > 0) ? (elapsed * (PERMS - p)) / double(p) : 0;
+							int eta_h = int(eta_seconds) / 3600;
+							int eta_m = (int(eta_seconds) % 3600) / 60;
+							int eta_s = int(eta_seconds) % 60;
+							// Clear previous lines (progress bar, elapsed, ETA)
+							std::cout << "\r\033[K"; // Clear progress bar line
+							std::cout << "\033[F\033[K"; // Clear elapsed line
+							std::cout << "\033[F\033[K"; // Clear ETA line
+							std::cout << "[";
+							int completed_blocks = p * 10 / PERMS;
+							for (int b = 0; b < 10; ++b)
+								std::cout << (b < completed_blocks ? '#' : '-');
+							std::cout << "] " << p << "/" << PERMS << " - " << std::fixed << std::setprecision(2)
+									  << percent_display << "% of total permutation complete..." << std::endl;
+							std::cout << "Elapsed: " << elapsed << "s" << std::endl;
+							std::cout << "ETA (HH:MM:SS): " << std::setfill('0') << std::setw(2) << eta_h << ":"
+									  << std::setw(2) << eta_m << ":" << std::setw(2) << eta_s << std::flush;
+						}
+					}
+				}
 			}
-			// Remove all per-iteration prints
-		}
-
-		// Only one thread prints the progress bar at the end of the test
-		#pragma omp master
-		{
-			std::cout << "[";
-			for(int i = 0; i < 10; ++i) std::cout << "#";
-			std::cout << "] All permutation rounds complete for test " << (completed_test_index+1) << " of " << num_tests << std::endl;
-			completed_test_index++;
 		}
 
 		delete[](data);
 		delete[](rawdata);
 	} //end parallel
 
+	if (istty) {
+		std::cout << "\r\033[K[##########] " << PERMS << "/" << PERMS
+				  << " - 100.00% of total permutation complete. ✅ Done.\n";
+	}
 	if(verbose > 1) print_results(C, verbose);
 
     populateTestCase(tc, C);
