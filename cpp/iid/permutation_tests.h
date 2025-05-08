@@ -1,4 +1,7 @@
+#include <memory>
 #include <chrono>
+#include <fstream> // For ofstream
+#include <cstdio>  // For fileno
 #pragma once
 
 #include <stdlib.h>
@@ -476,13 +479,13 @@ void print_results(int C[][3], const int verbose){
 	cout << "----------------------------------------------------" << endl;
 	for(unsigned int i = 0; i < num_tests; ++i){
 		if((C[i][0] + C[i][1] <= 5) || C[i][1] + C[i][2] <= 5){
-			cout << setw(24) << test_names[i] << "*";
+			cout << std::left << std::setw(25) << (test_names[i] + "*") << std::right;
 		}else{
-			cout << setw(25) << test_names[i];
+			cout << std::left << std::setw(25) << test_names[i] << std::right;
 		}
-		cout << setw(8) << C[i][0];
-		cout << setw(8) << C[i][1];
-		cout << setw(8) << C[i][2] << endl;
+		cout << "  " << std::setw(5) << C[i][0]
+		     << "  " << std::setw(5) << C[i][1]
+		     << "  " << std::setw(5) << C[i][2] << endl;
 	}
 	cout << "(* denotes failed test)" << endl;
 	cout << endl;
@@ -582,7 +585,6 @@ void populateTestCase(IidTestCase &tc, int C[][3]){
 bool permutation_tests(const data_t *dp, const double rawmean, const double median, const int verbose, IidTestCase &tc){
 	auto start_time = std::chrono::steady_clock::now();
 	uint64_t xoshiro256starstarMainSeed[4];
-	bool istty;
 
 	// Progress
 	int total_perms = PERMS;
@@ -598,7 +600,18 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 	// To store p-values
 	std::vector<double> p_values(num_tests, 0.0);
 
-	istty = (isatty(fileno(stderr)) == 1);
+	bool istty;
+	istty = (isatty(fileno(stdout)) == 1);
+
+	// Status stream for progress output (tty or redirected)
+	std::ostream* status_stream = &std::cout;
+	std::unique_ptr<std::ofstream> tty_out;
+	if (istty) {
+	    tty_out = std::unique_ptr<std::ofstream>(new std::ofstream("/dev/tty"));
+	    if (tty_out->is_open()) {
+	        status_stream = tty_out.get();
+	    }
+	}
 
 	// Build map of results
 	for(unsigned int i = 0; i < num_tests; ++i){
@@ -631,7 +644,7 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 	
 	if(verbose == 2) cout << "Beginning permutation tests... these may take some time" << endl;
 	if (istty) {
-	    std::cout << "[----------] 0/" << PERMS << " - 0.00% of total permutation complete...\nElapsed: 0s\nETA (HH:MM:SS): 00:00:00" << std::flush;
+	    *status_stream << "[----------] 0/" << PERMS << " - 0.00% of total permutation complete...\nElapsed: 0s\nETA (HH:MM:SS): 00:00:00" << std::flush;
 	}
 
 	// Progress tracking for all permutations
@@ -668,48 +681,62 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 
 			#pragma omp critical(resultUpdate)
 			{
-				for(unsigned int j = 0; j < num_tests; ++j){
-					if(test_status[j]) {
-						if (tp[j] < t[j]) {
-							C[j][0]++;
-						} else if (tp[j] == t[j]) {
-							C[j][1]++;
-						} else {
-							C[j][2]++;
-						}
-					}
-				}
-				int p = ++completed;
-				if (istty) {
-					static thread_local int last_percent = -1;
-					int current_percent = (p * 10000) / PERMS; // percent in hundredths
-					if (current_percent > last_percent) {
-						last_percent = current_percent;
-						#pragma omp critical(printProgress)
-						{
-							float percent_display = (100.0f * p) / PERMS;
-							auto now = std::chrono::steady_clock::now();
-							auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
-							double eta_seconds = (p > 0) ? (elapsed * (PERMS - p)) / double(p) : 0;
-							int eta_h = int(eta_seconds) / 3600;
-							int eta_m = (int(eta_seconds) % 3600) / 60;
-							int eta_s = int(eta_seconds) % 60;
-							// Clear previous lines (progress bar, elapsed, ETA)
-							std::cout << "\r\033[K"; // Clear progress bar line
-							std::cout << "\033[F\033[K"; // Clear elapsed line
-							std::cout << "\033[F\033[K"; // Clear ETA line
-							std::cout << "[";
-							int completed_blocks = p * 10 / PERMS;
-							for (int b = 0; b < 10; ++b)
-								std::cout << (b < completed_blocks ? '#' : '-');
-							std::cout << "] " << p << "/" << PERMS << " - " << std::fixed << std::setprecision(2)
-									  << percent_display << "% of total permutation complete..." << std::endl;
-							std::cout << "Elapsed: " << elapsed << "s" << std::endl;
-							std::cout << "ETA (HH:MM:SS): " << std::setfill('0') << std::setw(2) << eta_h << ":"
-									  << std::setw(2) << eta_m << ":" << std::setw(2) << eta_s << std::flush;
-						}
-					}
-				}
+			    for (unsigned int j = 0; j < num_tests; ++j) {
+			        if(test_status[j]) {
+			            if (tp[j] < t[j]) {
+			                C[j][0]++;
+			            } else if (tp[j] == t[j]) {
+			                C[j][1]++;
+			            } else {
+			                C[j][2]++;
+			            }
+			        }
+			    }
+			    int p = ++completed;
+			    if (verbose >= 1 && istty) {
+			        static thread_local int last_percent = -1;
+			        int current_percent = (p * 10000) / PERMS; // percent in hundredths
+			        if (current_percent > last_percent) {
+			            last_percent = current_percent;
+			            #pragma omp critical(printProgress)
+			            {
+			                float percent_display = (100.0f * p) / PERMS;
+			                auto now = std::chrono::steady_clock::now();
+			                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+			                double eta_seconds = (p > 0) ? (elapsed * (PERMS - p)) / double(p) : 0;
+			                int eta_h = int(eta_seconds) / 3600;
+			                int eta_m = (int(eta_seconds) % 3600) / 60;
+			                int eta_s = int(eta_seconds) % 60;
+			                // Use ANSI escape codes to clear and update the dynamic progress display
+			                if (istty) {
+			                    *status_stream << "\r\033[K";
+			                    *status_stream << "\033[F\033[K";
+			                    *status_stream << "\033[F\033[K";
+			                    *status_stream << "[";
+			                    int completed_blocks = p * 10 / PERMS;
+			                    for (int b = 0; b < 10; ++b)
+			                        *status_stream << (b < completed_blocks ? '#' : '-');
+			                    *status_stream << "] " << p << "/" << PERMS << " - " << std::fixed << std::setprecision(2)
+			                              << percent_display << "% of total permutation complete..." << std::endl;
+			                    *status_stream << "Elapsed: " << elapsed << "s" << std::endl;
+			                    *status_stream << "ETA (HH:MM:SS): " << std::setfill('0') << std::setw(2) << eta_h << ":"
+			                              << std::setw(2) << eta_m << ":" << std::setw(2) << eta_s << std::flush;
+			                }
+			            }
+			        }
+			    } else {
+			        // For non-tty (e.g. redirected to a file), only print a single final progress message.
+			        if (p == PERMS) {
+			            float percent_display = (100.0f * p) / PERMS;
+			            auto now = std::chrono::steady_clock::now();
+			            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+			            *status_stream << "[##########] " << p << "/" << PERMS << " - " 
+			                      << std::fixed << std::setprecision(2) << percent_display 
+			                      << "% of total permutation complete. ✅ Done." << std::endl;
+			            *status_stream << "Elapsed: " << elapsed << "s" << std::endl;
+			            *status_stream << "ETA (HH:MM:SS): 00:00:00" << std::endl;
+			        }
+			    }
 			}
 		}
 
@@ -718,7 +745,7 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 	} //end parallel
 
 	if (istty) {
-		std::cout << "\r\033[K[##########] " << PERMS << "/" << PERMS
+		*status_stream << "\r\033[K[##########] " << PERMS << "/" << PERMS
 				  << " - 100.00% of total permutation complete. ✅ Done.\n";
 	}
 	if(verbose > 1) print_results(C, verbose);
@@ -738,13 +765,16 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
     tc.p_values.clear();
     for (unsigned int i = 0; i < num_tests; ++i) {
 		 int total = PERMS;
-		 double p = (C[i][2] + C[i][1]) / total;
+		 double c0 = static_cast<double>(C[i][0]);
+		 double c1 = static_cast<double>(C[i][1]);
+		 double c2 = static_cast<double>(C[i][2]);
+		 double p = (0.5 * (c0 + c2) + c1) / total;
 		 p_values[i] = p;
 		 tc.p_values.push_back(p);
 		 if (verbose >= 1)
 		 {
-			 std::cout << "    " << std::setw(23) << test_names[i]
-						  << "  P-value: " << std::fixed << std::setprecision(6) << p << std::endl;
+			 std::cout << "    " << std::left << std::setw(25) << test_names[i]
+			           << "P-value: " << std::fixed << std::setprecision(6) << p << std::endl;
 		 }
     }
     return true;
