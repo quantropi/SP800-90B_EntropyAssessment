@@ -697,7 +697,7 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
     populateTestCase(tc, C);
 	 tc.passed_iid_permutation_tests = true;
 		for (unsigned int i = 0; i < num_tests; ++i) {
-			if ((C[i][0] + C[i][1] <= 5) || (C[i][1] + C[i][2] <= 5)) {
+			if ((C[i][0] + C[i][1] <= LOW_THRESH) || (C[i][1] + C[i][2] <= HIGH_THRESH)) {
 				tc.passed_iid_permutation_tests = false;
 				break;
 			}
