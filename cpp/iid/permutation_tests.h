@@ -647,9 +647,6 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 	
 	if(verbose == 2) cout << "Beginning permutation tests... these may take some time" << endl;
 	if(verbose >= 1) std::cout << std::endl;
-	if (istty && verbose >= 1) {
-	    *status_stream << "\n[----------] 0/" << PERMS << " - 0.00% of total permutation complete...\nElapsed: 0s\nETA (HH:MM:SS): 00:00:00" << std::flush;
-	}
 
 	// Progress tracking for all permutations
 	std::atomic<size_t> completed{0};
