@@ -13,3 +13,5 @@ ea_transpose
 *.json
 .DS_Store
 *.res
+.gitignore
+cpp/Makefile

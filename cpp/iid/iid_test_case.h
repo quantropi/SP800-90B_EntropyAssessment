@@ -25,6 +25,7 @@ public:
     double h_i = -1.0;
 
     vector<PermutationTestResult> testResults;
+    std::vector<double> p_values; // Stores permutation test p-values
 
     Json::Value GetAsJson() {
         Json::Value json = TestCaseBase::GetBaseJson();
@@ -50,6 +51,13 @@ public:
         for (int i = 0; i < (int)testResults.size(); i++) {
             permutationTestResults[i] = testResults[i].GetAsJson();
         }
+
+        // Add permutationPValues array
+        Json::Value pValueArray;
+        for (size_t i = 0; i < p_values.size(); ++i) {
+            pValueArray[Json::ArrayIndex(i)] = p_values[i];
+        }
+        json["permutationPValues"] = pValueArray;
 
         json["permutationTestResults"] = permutationTestResults;
 

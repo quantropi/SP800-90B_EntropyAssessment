@@ -1,3 +1,7 @@
+#include <memory>
+#include <chrono>
+#include <cstdio>  // For fileno
+#include <fstream>
 #pragma once
 
 #include <stdlib.h>
@@ -6,12 +10,18 @@
 #include "../shared/TestCase.h"
 #include <assert.h>
 #include <unistd.h>
+#include <vector>
+#include <iomanip>
+#include <atomic>
 
 // The tests used
 const unsigned int num_tests = 19;
 const string test_names[] = {"excursion","numDirectionalRuns","lenDirectionalRuns","numIncreasesDecreases","numRunsMedian","lenRunsMedian","avgCollision","maxCollision","periodicity(1)","periodicity(2)","periodicity(8)","periodicity(16)","periodicity(32)","covariance(1)","covariance(2)","covariance(8)","covariance(16)","covariance(32)","compression"};
 
 using namespace std;
+
+const int LOW_THRESH = (int)(0.01/2 * PERMS);  // 50 when PERMS = 10000
+const int HIGH_THRESH = PERMS - LOW_THRESH;     // 9950
 
 /*
  * ---------------------------------------------
@@ -469,13 +479,13 @@ void print_results(int C[][3], const int verbose){
 	cout << "----------------------------------------------------" << endl;
 	for(unsigned int i = 0; i < num_tests; ++i){
 		if((C[i][0] + C[i][1] <= 5) || C[i][1] + C[i][2] <= 5){
-			cout << setw(24) << test_names[i] << "*";
+			cout << std::left << std::setw(25) << (test_names[i] + "*") << std::right;
 		}else{
-			cout << setw(25) << test_names[i];
+			cout << std::left << std::setw(25) << test_names[i] << std::right;
 		}
-		cout << setw(8) << C[i][0];
-		cout << setw(8) << C[i][1];
-		cout << setw(8) << C[i][2] << endl;
+		cout << "  " << std::setw(5) << C[i][0]
+		     << "  " << std::setw(5) << C[i][1]
+		     << "  " << std::setw(5) << C[i][2] << endl;
 	}
 	cout << "(* denotes failed test)" << endl;
 	cout << endl;
@@ -573,11 +583,13 @@ void populateTestCase(IidTestCase &tc, int C[][3]){
 }
 
 bool permutation_tests(const data_t *dp, const double rawmean, const double median, const int verbose, IidTestCase &tc){
+	auto start_time = std::chrono::steady_clock::now();
 	uint64_t xoshiro256starstarMainSeed[4];
-	bool istty;
 
 	// Progress
-	size_t completed = 0;
+	int total_perms = PERMS;
+	std::atomic<int> next_percent{10};
+	int completed_test_index = 0;
 
 	// Counters for the pass/fail of each statistic
 	int C[num_tests][3];
@@ -585,8 +597,23 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 	// Original test results (t) 
 	long double t[num_tests];
 	bool test_status[num_tests];
+	// To store p-values
+	std::vector<double> p_values(num_tests, 0.0);
 
-	istty = (isatty(STDOUT_FILENO)==1);
+	bool istty;
+	istty = (isatty(fileno(stdout)) == 1);
+
+	// Status stream for progress output (tty or redirected)
+	std::ostream* status_stream = &std::cout;
+	std::unique_ptr<std::ofstream> tty_out;
+	if (!istty) {
+	    // Try opening /dev/tty directly for terminal output even if stdout is redirected
+	    tty_out.reset(new std::ofstream("/dev/tty"));
+	    if (tty_out->is_open()) {
+	        status_stream = tty_out.get();
+	        istty = true; // enable status updates
+	    }
+	}
 
 	// Build map of results
 	for(unsigned int i = 0; i < num_tests; ++i){
@@ -618,6 +645,10 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 	}
 	
 	if(verbose == 2) cout << "Beginning permutation tests... these may take some time" << endl;
+	if(verbose >= 1) std::cout << std::endl;
+
+	// Progress tracking for all permutations
+	std::atomic<size_t> completed{0};
 
 	#pragma omp parallel
 	{
@@ -625,7 +656,6 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 		uint8_t *rawdata;
 		uint64_t xoshiro256starstarSeed[4];
 		long double tp[num_tests];
-		int passed_count;
 
 		data = new uint8_t[dp->len];
 		rawdata = new uint8_t[dp->len];
@@ -640,100 +670,113 @@ bool permutation_tests(const data_t *dp, const double rawmean, const double medi
 			rawdata[i] = dp->rawsymbols[i];
 		}
 
-		passed_count = 0;
 		memcpy(xoshiro256starstarSeed, xoshiro256starstarMainSeed, sizeof(xoshiro256starstarMainSeed));
 		//Cause the RNG to jump omp_get_thread_num() * 2^128 calls
 		xoshiro_jump(omp_get_thread_num(), xoshiro256starstarSeed);
 
 		#pragma omp for
 		for(int i = 0; i < PERMS; ++i) {
-			if(passed_count < 19) {
-				char statusMessage[1024];
-				size_t statusMessageLength = 0;
+			FYshuffle(data, rawdata, dp->len, xoshiro256starstarSeed);
+			run_tests(dp, data, rawdata, rawmean, median, tp, test_status);
 
-				FYshuffle(data, rawdata, dp->len, xoshiro256starstarSeed);
-				run_tests(dp, data, rawdata, rawmean, median, tp, test_status);
-
-				// Aggregate results into the counters
-				#pragma omp critical(resultUpdate)
-				{
-					for(unsigned int j = 0; j < num_tests; ++j){
-						if(test_status[j]) {
-							if(tp[j] > t[j]){
-								C[j][0]++;
-							} else if(tp[j] == t[j]){
-								C[j][1]++;
-							} else {
-								C[j][2]++;
-							}
-							if((C[j][0] + C[j][1] > 5) && (C[j][1] + C[j][2] > 5)) {
-								test_status[j] = false;
-							}
-						}
-					}
-					passed_count = 0;
-					for(unsigned int j=0; j < num_tests; j++) if(!test_status[j]) passed_count++;
-					completed ++;
-				} // end resultUpdate
-
-				if(verbose == 2) {
-					int res;
-					/* Construct pretty output regardless of whether on terminal (tty) or 
-					* redirected to another file descriptor (eg. redirect to file).
-					* Note that if using something like 'tee' to replicate the output
-					* then it might be handy to use 'unbuffer' to fake the call into
-					* thinking it is still being sent to a tty.
-					*/
-					if(istty) {
-						statusMessage[0] = '\r';
-						statusMessage[1] = '\0';
-						statusMessageLength = 1;
-					} else {
-						statusMessage[0] = '\0';
-						statusMessageLength = 0;
-					}
-
-					res = snprintf(statusMessage+statusMessageLength, sizeof(statusMessage)-statusMessageLength, "%6.02f%% of Permutation test rounds, %6.02f%% of Permutation tests", (100.0*((float)completed)/((float)PERMS)), (100.0*((float)passed_count)/19.0));
-					assert(res>0);
-					statusMessageLength += res;
-					assert(statusMessageLength < sizeof(statusMessage));
-
-					/* If not displaying to screen, then we can print even more information. Ultimately
-					* we want the '\n' however printed when not printing to terminal so that the redirected
-					* output looks nicer. 
-					*/
-					if(!istty)  {
-						res = snprintf(statusMessage+statusMessageLength, sizeof(statusMessage)-statusMessageLength, " (Core %d/%d, passed_count %d)\n", omp_get_thread_num(), omp_get_num_threads()-1, passed_count);
-						assert(res>0);
-						statusMessageLength += res;
-						assert(statusMessageLength < sizeof(statusMessage));
-					}
-					#pragma omp critical(verboseOutput)
-					{
-						fputs(statusMessage, stdout);
-						fflush(stdout);
-					}
-				}
-			} else {
-				//We don't have a lock for this branch, so make one to update the completed count.
-				#pragma omp atomic
-				completed ++;
+			#pragma omp critical(resultUpdate)
+			{
+			    for (unsigned int j = 0; j < num_tests; ++j) {
+			        if(test_status[j]) {
+			            if (tp[j] < t[j]) {
+			                C[j][0]++;
+			            } else if (tp[j] == t[j]) {
+			                C[j][1]++;
+			            } else {
+			                C[j][2]++;
+			            }
+			        }
+			    }
+			    int p = ++completed;
+			    if (verbose >= 1 && istty) {
+			        static thread_local int last_percent = -1;
+			        int current_percent = (p * 10000) / PERMS; // percent in hundredths
+			        if (current_percent > last_percent) {
+			            last_percent = current_percent;
+			            #pragma omp critical(printProgress)
+			            {
+			                float percent_display = (100.0f * p) / PERMS;
+			                auto now = std::chrono::steady_clock::now();
+			                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+			                double eta_seconds = (p > 0) ? (elapsed * (PERMS - p)) / double(p) : 0;
+			                int eta_h = int(eta_seconds) / 3600;
+			                int eta_m = (int(eta_seconds) % 3600) / 60;
+			                int eta_s = int(eta_seconds) % 60;
+			                // Use ANSI escape codes to clear and update the dynamic progress display
+			                if (istty) {
+			                    *status_stream << "\r\033[K";
+			                    *status_stream << "\033[F\033[K";
+			                    *status_stream << "\033[F\033[K";
+			                    *status_stream << "[";
+			                    int completed_blocks = p * 10 / PERMS;
+			                    for (int b = 0; b < 10; ++b)
+			                        *status_stream << (b < completed_blocks ? '#' : '-');
+			                    *status_stream << "] " << p << "/" << PERMS << " - " << std::fixed << std::setprecision(2)
+			                              << percent_display << "% of total permutation complete..." << std::endl;
+			                    *status_stream << "Elapsed: " << elapsed << "s" << std::endl;
+			                    *status_stream << "ETA (HH:MM:SS): " << std::setfill('0') << std::setw(2) << eta_h << ":"
+			                              << std::setw(2) << eta_m << ":" << std::setw(2) << eta_s << std::flush;
+			                    std::cout << std::flush;  // Ensure no buffer bleed into terminal rendering
+			                }
+			            }
+			        }
+			    } else {
+			        // For non-tty (e.g. redirected to a file), only print a single final progress message.
+			        if (p == PERMS) {
+			            float percent_display = (100.0f * p) / PERMS;
+			            auto now = std::chrono::steady_clock::now();
+			            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - start_time).count();
+			            *status_stream << "[##########] " << p << "/" << PERMS << " - " 
+			                      << std::fixed << std::setprecision(2) << percent_display 
+			                      << "% of total permutation complete. ✅ Done." << std::endl;
+			            *status_stream << "Elapsed: " << elapsed << "s" << std::endl;
+			            *status_stream << "ETA (HH:MM:SS): 00:00:00" << std::endl;
+			        }
+			    }
 			}
-
 		}
-        	delete[](data);
-        	delete[](rawdata);
+
+		delete[](data);
+		delete[](rawdata);
 	} //end parallel
 
-	if(verbose > 1) print_results(C, verbose);
-        
-    populateTestCase(tc, C);
-	
-    for(unsigned int i = 0; i < num_tests; ++i){
-		if((C[i][0] + C[i][1] <= 5) || (C[i][1] + C[i][2] <= 5)){
-			return false;
-	 	}
+	if (istty && verbose >= 1) {
+		*status_stream << "\n[##########] " << PERMS << "/" << PERMS
+				  << " - 100.00% of total permutation complete. ✅ Done.\n";
 	}
+	if(verbose > 1) print_results(C, verbose);
 
-	return true;
+    populateTestCase(tc, C);
+	 tc.passed_iid_permutation_tests = true;
+		for (unsigned int i = 0; i < num_tests; ++i) {
+			if ((C[i][0] + C[i][1] <= LOW_THRESH) || (C[i][0] + C[i][2] >= HIGH_THRESH)) {
+				tc.passed_iid_permutation_tests = false;
+				break;
+			}
+		}
+
+    if (verbose >= 1) {
+        std::cout << "\n=== Permutation Test P-values ===" << std::endl;
+    }
+    tc.p_values.clear();
+    for (unsigned int i = 0; i < num_tests; ++i) {
+		 int total = PERMS;
+		 double c0 = static_cast<double>(C[i][0]);
+		 double c1 = static_cast<double>(C[i][1]);
+		 double c2 = static_cast<double>(C[i][2]);
+		 double p = (0.5 * (c0 + c2) + c1) / total;
+		 p_values[i] = p;
+		 tc.p_values.push_back(p);
+		 if (verbose >= 1)
+		 {
+			 std::cout << "    " << std::left << std::setw(25) << test_names[i]
+			           << "P-value: " << std::fixed << std::setprecision(6) << p << std::endl;
+		 }
+    }
+    return true;
 }
